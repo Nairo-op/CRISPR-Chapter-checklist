@@ -412,7 +412,7 @@ const App = () => {
                   return (
                     <div
                       key={sec.id}
-                      style={{ width: `${(secCount / 30) * 100}%` }}
+                      style={{ width: `${(secCount / 36) * 100}%` }}
                       className={`h-full transition-all duration-500 ${secChecked === secCount ? sectionColorToBg(sec.color) : secChecked > 0 ? sectionColorToBg(sec.color) + " opacity-40" : "bg-white/5"}`}
                     />
                   );
