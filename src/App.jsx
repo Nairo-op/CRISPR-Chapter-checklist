@@ -389,7 +389,7 @@ const App = () => {
                     Saved to Local Storage
                   </h5>
                   <p className="text-white text-xs font-bold">
-                    {completedCount} of 30 checkpoints verified
+                    {completedCount} of 36 checkpoints verified
                   </p>
                 </div>
                 <button
