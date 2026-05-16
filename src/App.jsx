@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   FileText,
   BookOpen,
@@ -149,16 +149,55 @@ const SUBJECT_CONFIG = {
   MATHS: ["3D Geometry", "Conic Sections", "Straight Lines"],
 };
 
+const STORAGE_SUBJECTS_KEY = "crispr_subjects_v1";
+const CHECKLIST_ITEM_COUNT = CHECKLIST_DATA.reduce(
+  (sum, section) => sum + section.items.length,
+  0,
+);
+
 const App = () => {
-  const [selectedSubject, setSelectedSubject] = useState("PHYSICS");
-  const [selectedChapter, setSelectedChapter] = useState(
-    SUBJECT_CONFIG["PHYSICS"][0],
-  );
+  const [subjectData, setSubjectData] = useState(() => {
+    const saved = localStorage.getItem(STORAGE_SUBJECTS_KEY);
+    return saved ? JSON.parse(saved) : SUBJECT_CONFIG;
+  });
+
+  const [selectedSubject, setSelectedSubject] = useState(() => {
+    const saved = localStorage.getItem(STORAGE_SUBJECTS_KEY);
+    const config = saved ? JSON.parse(saved) : SUBJECT_CONFIG;
+    return Object.keys(config)[0] ?? "PHYSICS";
+  });
+
+  const [selectedChapter, setSelectedChapter] = useState(() => {
+    const saved = localStorage.getItem(STORAGE_SUBJECTS_KEY);
+    const config = saved ? JSON.parse(saved) : SUBJECT_CONFIG;
+    const subject = Object.keys(config)[0] ?? "PHYSICS";
+    return config[subject]?.[0] ?? "";
+  });
+
   const [checkedItems, setCheckedItems] = useState({});
   const [isLoaded, setIsLoaded] = useState(false);
+  const [pageMode, setPageMode] = useState("checklist");
 
   const storageKey = `crispr_v3_${selectedSubject}_${selectedChapter.replace(/\s/g, "_")}`;
   const lastKeyRef = useRef(storageKey);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_SUBJECTS_KEY, JSON.stringify(subjectData));
+  }, [subjectData]);
+
+  useEffect(() => {
+    if (!subjectData[selectedSubject]) {
+      const nextSubject = Object.keys(subjectData)[0] ?? "PHYSICS";
+      setSelectedSubject(nextSubject);
+      setSelectedChapter(subjectData[nextSubject]?.[0] ?? "");
+      return;
+    }
+
+    if (!subjectData[selectedSubject].includes(selectedChapter)) {
+      setSelectedChapter(subjectData[selectedSubject][0] ?? "");
+      return;
+    }
+  }, [selectedSubject, selectedChapter, subjectData]);
 
   // 1. Initial Load when StorageKey changes
   useEffect(() => {
@@ -187,18 +226,139 @@ const App = () => {
 
   const handleSubjectChange = (subject) => {
     setSelectedSubject(subject);
-    setSelectedChapter(SUBJECT_CONFIG[subject][0]);
+    setSelectedChapter(subjectData[subject]?.[0] ?? "");
   };
 
-  const totalCount = CHECKLIST_DATA.reduce(
-    (sum, section) => sum + section.items.length,
-    0,
-  );
+  const renameChapterKey = (subject, oldChapter, newChapter) => {
+    const oldKey = `crispr_v3_${subject}_${oldChapter.replace(/\s/g, "_")}`;
+    const newKey = `crispr_v3_${subject}_${newChapter.replace(/\s/g, "_")}`;
+    const saved = localStorage.getItem(oldKey);
+    if (saved) {
+      localStorage.setItem(newKey, saved);
+      localStorage.removeItem(oldKey);
+    }
+    return newKey;
+  };
+
+  const renameSubjectKey = (oldSubject, newSubject) => {
+    const chapterList = subjectData[oldSubject] ?? [];
+    chapterList.forEach((chapter) => {
+      const oldKey = `crispr_v3_${oldSubject}_${chapter.replace(/\s/g, "_")}`;
+      const newKey = `crispr_v3_${newSubject}_${chapter.replace(/\s/g, "_")}`;
+      const saved = localStorage.getItem(oldKey);
+      if (saved) {
+        localStorage.setItem(newKey, saved);
+        localStorage.removeItem(oldKey);
+      }
+    });
+  };
+
+  const handleAddSubject = () => {
+    const newSubject = window.prompt("Add a new subject", "");
+    if (!newSubject || !newSubject.trim()) return;
+    const normalized = newSubject.trim();
+    if (subjectData[normalized]) {
+      window.alert("Subject already exists.");
+      return;
+    }
+    setSubjectData((prev) => ({
+      ...prev,
+      [normalized]: [],
+    }));
+    setSelectedSubject(normalized);
+    setSelectedChapter("");
+  };
+
+  const handleAddChapter = () => {
+    const newChapter = window.prompt(
+      "Add a new chapter to " + selectedSubject,
+      "",
+    );
+    if (!newChapter || !newChapter.trim()) return;
+    const trimmed = newChapter.trim();
+    if (subjectData[selectedSubject]?.includes(trimmed)) {
+      window.alert("Chapter already exists in this subject.");
+      return;
+    }
+    setSubjectData((prev) => ({
+      ...prev,
+      [selectedSubject]: [...(prev[selectedSubject] || []), trimmed],
+    }));
+    setSelectedChapter(trimmed);
+  };
+
+  const handleRenameSubject = () => {
+    const newName = window.prompt("Rename subject", selectedSubject);
+    if (!newName || !newName.trim() || newName === selectedSubject) return;
+    const normalized = newName.trim();
+    if (subjectData[normalized]) {
+      window.alert("Subject name already in use.");
+      return;
+    }
+    setSubjectData((prev) => {
+      const updated = { ...prev };
+      updated[normalized] = updated[selectedSubject];
+      delete updated[selectedSubject];
+      return updated;
+    });
+    renameSubjectKey(selectedSubject, normalized);
+    setSelectedSubject(normalized);
+  };
+
+  const handleRenameChapter = () => {
+    if (!selectedChapter) return;
+    const newName = window.prompt("Rename chapter", selectedChapter);
+    if (!newName || !newName.trim() || newName === selectedChapter) return;
+    const trimmed = newName.trim();
+    if (subjectData[selectedSubject]?.includes(trimmed)) {
+      window.alert("A chapter with that name already exists.");
+      return;
+    }
+    setSubjectData((prev) => {
+      const chapters = prev[selectedSubject] || [];
+      return {
+        ...prev,
+        [selectedSubject]: chapters.map((chapter) =>
+          chapter === selectedChapter ? trimmed : chapter,
+        ),
+      };
+    });
+    renameChapterKey(selectedSubject, selectedChapter, trimmed);
+    setSelectedChapter(trimmed);
+  };
+
+  const totalCount = CHECKLIST_ITEM_COUNT;
   const completedCount = Object.values(checkedItems).filter(Boolean).length;
   const progressPercentage = Math.min(
     100,
     Math.max(0, (completedCount / totalCount) * 100),
   );
+
+  const allChapterSummary = useMemo(() => {
+    const summary = [];
+    Object.entries(subjectData).forEach(([subject, chapters]) => {
+      chapters.forEach((chapter) => {
+        const key = `crispr_v3_${subject}_${chapter.replace(/\s/g, "_")}`;
+        const saved = JSON.parse(localStorage.getItem(key) || "{}");
+        const completed = Object.values(saved).filter(Boolean).length;
+        summary.push({
+          subject,
+          chapter,
+          completed,
+          percent: Math.round((completed / CHECKLIST_ITEM_COUNT) * 100),
+        });
+      });
+    });
+    return summary;
+  }, [subjectData, selectedSubject, selectedChapter, checkedItems]);
+
+  const overallProgress =
+    allChapterSummary.length > 0
+      ? Math.round(
+          allChapterSummary.reduce((sum, chapter) => sum + chapter.percent, 0) /
+            allChapterSummary.length,
+        )
+      : 0;
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-gray-300 font-sans selection:bg-yellow-500/30">
@@ -214,7 +374,7 @@ const App = () => {
         </div>
 
         <div className="space-y-8">
-          {Object.keys(SUBJECT_CONFIG).map((subject) => (
+          {Object.keys(subjectData).map((subject) => (
             <div key={subject} className="space-y-3">
               <button
                 onClick={() => handleSubjectChange(subject)}
@@ -223,7 +383,7 @@ const App = () => {
                 {subject}
               </button>
               <div className="space-y-1">
-                {SUBJECT_CONFIG[subject].map((chapter) => (
+                {subjectData[subject].map((chapter) => (
                   <button
                     key={chapter}
                     onClick={() => setSelectedChapter(chapter)}
@@ -252,7 +412,7 @@ const App = () => {
           {/* Mobile Navigation */}
           <div className="lg:hidden mb-8 space-y-4">
             <div className="flex gap-2 bg-[#141414] p-1 rounded-xl border border-white/5">
-              {Object.keys(SUBJECT_CONFIG).map((s) => (
+              {Object.keys(subjectData).map((s) => (
                 <button
                   key={s}
                   onClick={() => handleSubjectChange(s)}
@@ -267,7 +427,7 @@ const App = () => {
               onChange={(e) => setSelectedChapter(e.target.value)}
               className="w-full bg-[#141414] border border-white/5 rounded-xl px-4 py-3 text-sm font-medium text-white appearance-none outline-none"
             >
-              {SUBJECT_CONFIG[selectedSubject].map((c) => (
+              {subjectData[selectedSubject]?.map((c) => (
                 <option key={c} value={c}>
                   {c}
                 </option>
@@ -292,65 +452,176 @@ const App = () => {
             <p className="text-gray-500 text-sm mt-2">
               Quality audit & content verification checklist
             </p>
+
+            <div className="mt-6 flex flex-wrap gap-3">
+              <button
+                onClick={() => setPageMode("checklist")}
+                className={`rounded-full px-4 py-2 text-xs font-black uppercase tracking-[0.2em] transition ${pageMode === "checklist" ? "bg-blue-500 text-white" : "bg-white/5 text-gray-300 hover:bg-white/10"}`}
+              >
+                Chapter checklist
+              </button>
+              <button
+                onClick={() => setPageMode("overview")}
+                className={`rounded-full px-4 py-2 text-xs font-black uppercase tracking-[0.2em] transition ${pageMode === "overview" ? "bg-blue-500 text-white" : "bg-white/5 text-gray-300 hover:bg-white/10"}`}
+              >
+                All progress
+              </button>
+              <button
+                onClick={handleAddChapter}
+                className="rounded-full px-4 py-2 text-xs font-black uppercase tracking-[0.2em] bg-white/5 text-gray-300 hover:bg-white/10"
+              >
+                Add chapter
+              </button>
+              <button
+                onClick={handleAddSubject}
+                className="rounded-full px-4 py-2 text-xs font-black uppercase tracking-[0.2em] bg-white/5 text-gray-300 hover:bg-white/10"
+              >
+                Add subject
+              </button>
+              <button
+                onClick={handleRenameChapter}
+                className="rounded-full px-4 py-2 text-xs font-black uppercase tracking-[0.2em] bg-white/5 text-gray-300 hover:bg-white/10"
+              >
+                Rename chapter
+              </button>
+              <button
+                onClick={handleRenameSubject}
+                className="rounded-full px-4 py-2 text-xs font-black uppercase tracking-[0.2em] bg-white/5 text-gray-300 hover:bg-white/10"
+              >
+                Rename subject
+              </button>
+            </div>
           </header>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-12">
-            {CHECKLIST_DATA.map((section) => (
-              <div key={section.id} className="space-y-4">
-                <div
-                  className={`flex items-center gap-2 border-b border-white/10 pb-3 ${section.color}`}
-                >
-                  {section.icon}
-                  <h3 className="text-[10px] font-black tracking-[0.15em] uppercase">
-                    {section.title}
-                  </h3>
-                </div>
-                <div className="space-y-2">
-                  {section.items.map((item) => (
-                    <div
-                      key={item.id}
-                      onClick={() => toggleItem(item.id)}
-                      className={`group flex items-start gap-3 cursor-pointer select-none p-2 -mx-2 rounded-xl transition-all ${
-                        checkedItems[item.id]
-                          ? "bg-white/[0.03]"
-                          : "hover:bg-white/[0.03]"
-                      }`}
-                    >
-                      <div
-                        className={`mt-0.5 flex-shrink-0 w-4 h-4 rounded-md border-2 transition-all flex items-center justify-center ${
-                          checkedItems[item.id]
-                            ? sectionColorToBorder(section.color) +
-                              " " +
-                              sectionColorToBg(section.color)
-                            : "border-white/10 group-hover:border-white/20"
-                        }`}
-                      >
-                        {checkedItems[item.id] && (
-                          <div className="w-1.5 h-1.5 bg-black rounded-full" />
-                        )}
-                      </div>
-                      <div className="flex flex-col">
-                        <span
-                          className={`text-xs leading-relaxed transition-colors ${
-                            checkedItems[item.id]
-                              ? "text-gray-200"
-                              : "text-gray-500 group-hover:text-gray-400"
-                          }`}
-                        >
-                          <span
-                            className={`font-black mr-2 opacity-40 text-[9px] ${section.color}`}
-                          >
-                            {item.id}
-                          </span>
-                          {item.text}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
+          {pageMode === "overview" ? (
+            <section className="space-y-6">
+              <div className="rounded-3xl bg-[#111]/80 border border-white/10 p-6 shadow-lg">
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-[0.3em] text-gray-500">
+                      All chapters progress
+                    </p>
+                    <h3 className="mt-2 text-2xl font-black text-white">
+                      Overall completion
+                    </h3>
+                  </div>
+                  <div className="rounded-full bg-[#0d0d0d] px-4 py-3 text-sm font-bold text-white">
+                    {overallProgress}% complete
+                  </div>
                 </div>
               </div>
-            ))}
-          </div>
+
+              <div className="grid gap-4">
+                {Object.entries(subjectData).map(([subject, chapters]) => (
+                  <div
+                    key={subject}
+                    className="rounded-3xl bg-[#111]/80 border border-white/10 p-6 shadow-lg"
+                  >
+                    <div className="flex items-center justify-between gap-4 mb-4">
+                      <div>
+                        <p className="text-[10px] font-black uppercase tracking-[0.3em] text-gray-500">
+                          {subject}
+                        </p>
+                        <h4 className="mt-2 text-xl font-black text-white">
+                          {chapters.length} chapters
+                        </h4>
+                      </div>
+                      <button
+                        onClick={() => handleSubjectChange(subject)}
+                        className="rounded-full bg-blue-500 px-3 py-2 text-xs font-black uppercase tracking-[0.2em] text-white hover:bg-blue-400"
+                      >
+                        View
+                      </button>
+                    </div>
+                    <div className="space-y-3">
+                      {chapters.map((chapter) => {
+                        const chapterProgress =
+                          allChapterSummary.find(
+                            (item) =>
+                              item.subject === subject &&
+                              item.chapter === chapter,
+                          )?.percent ?? 0;
+                        return (
+                          <div key={chapter} className="space-y-2">
+                            <div className="flex items-center justify-between gap-3">
+                              <p className="text-sm text-gray-200">{chapter}</p>
+                              <span className="text-xs font-black uppercase tracking-[0.2em] text-blue-400">
+                                {chapterProgress}%
+                              </span>
+                            </div>
+                            <div className="h-2 rounded-full bg-white/5 overflow-hidden">
+                              <div
+                                style={{ width: `${chapterProgress}%` }}
+                                className="h-full rounded-full bg-gradient-to-r from-blue-500 to-cyan-400"
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-12">
+              {CHECKLIST_DATA.map((section) => (
+                <div key={section.id} className="space-y-4">
+                  <div
+                    className={`flex items-center gap-2 border-b border-white/10 pb-3 ${section.color}`}
+                  >
+                    {section.icon}
+                    <h3 className="text-[10px] font-black tracking-[0.15em] uppercase">
+                      {section.title}
+                    </h3>
+                  </div>
+                  <div className="space-y-2">
+                    {section.items.map((item) => (
+                      <div
+                        key={item.id}
+                        onClick={() => toggleItem(item.id)}
+                        className={`group flex items-start gap-3 cursor-pointer select-none p-2 -mx-2 rounded-xl transition-all ${
+                          checkedItems[item.id]
+                            ? "bg-white/[0.03]"
+                            : "hover:bg-white/[0.03]"
+                        }`}
+                      >
+                        <div
+                          className={`mt-0.5 flex-shrink-0 w-4 h-4 rounded-md border-2 transition-all flex items-center justify-center ${
+                            checkedItems[item.id]
+                              ? sectionColorToBorder(section.color) +
+                                " " +
+                                sectionColorToBg(section.color)
+                              : "border-white/10 group-hover:border-white/20"
+                          }`}
+                        >
+                          {checkedItems[item.id] && (
+                            <div className="w-1.5 h-1.5 bg-black rounded-full" />
+                          )}
+                        </div>
+                        <div className="flex flex-col">
+                          <span
+                            className={`text-xs leading-relaxed transition-colors ${
+                              checkedItems[item.id]
+                                ? "text-gray-200"
+                                : "text-gray-500 group-hover:text-gray-400"
+                            }`}
+                          >
+                            <span
+                              className={`font-black mr-2 opacity-40 text-[9px] ${section.color}`}
+                            >
+                              {item.id}
+                            </span>
+                            {item.text}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </main>
 
