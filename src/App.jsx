@@ -190,9 +190,15 @@ const App = () => {
     setSelectedChapter(SUBJECT_CONFIG[subject][0]);
   };
 
-  const totalCount = 30;
+  const totalCount = CHECKLIST_DATA.reduce(
+    (sum, section) => sum + section.items.length,
+    0,
+  );
   const completedCount = Object.values(checkedItems).filter(Boolean).length;
-  const progressPercentage = (completedCount / totalCount) * 100;
+  const progressPercentage = Math.min(
+    100,
+    Math.max(0, (completedCount / totalCount) * 100),
+  );
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-gray-300 font-sans selection:bg-yellow-500/30">
@@ -389,7 +395,7 @@ const App = () => {
                     Saved to Local Storage
                   </h5>
                   <p className="text-white text-xs font-bold">
-                    {completedCount} of 36 checkpoints verified
+                    {completedCount} of {totalCount} checkpoints verified
                   </p>
                 </div>
                 <button
@@ -412,7 +418,7 @@ const App = () => {
                   return (
                     <div
                       key={sec.id}
-                      style={{ width: `${(secCount / 36) * 100}%` }}
+                      style={{ width: `${(secCount / totalCount) * 100}%` }}
                       className={`h-full transition-all duration-500 ${secChecked === secCount ? sectionColorToBg(sec.color) : secChecked > 0 ? sectionColorToBg(sec.color) + " opacity-40" : "bg-white/5"}`}
                     />
                   );
