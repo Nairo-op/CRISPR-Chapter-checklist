@@ -154,6 +154,9 @@ const CHECKLIST_ITEM_COUNT = CHECKLIST_DATA.reduce(
   (sum, section) => sum + section.items.length,
   0,
 );
+const CLOUD_ENABLED = Boolean(
+  import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY,
+);
 
 const App = () => {
   const [subjectData, setSubjectData] = useState(() => {
