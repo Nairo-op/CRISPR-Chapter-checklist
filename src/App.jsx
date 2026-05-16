@@ -11,6 +11,7 @@ import {
   Search,
   RotateCcw,
   ChevronRight,
+  MoreVertical,
 } from "lucide-react";
 
 const CHECKLIST_DATA = [
@@ -180,12 +181,69 @@ const App = () => {
   const [checkedItems, setCheckedItems] = useState({});
   const [isLoaded, setIsLoaded] = useState(false);
   const [pageMode, setPageMode] = useState("checklist");
+  const [showEditMenu, setShowEditMenu] = useState(false);
+  const [cloudSummary, setCloudSummary] = useState([]);
 
   const storageKey = `crispr_v3_${selectedSubject}_${selectedChapter.replace(/\s/g, "_")}`;
   const lastKeyRef = useRef(storageKey);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_SUBJECTS_KEY, JSON.stringify(subjectData));
+  }, [subjectData]);
+
+  useEffect(() => {
+    const syncSubjects = async () => {
+      if (!CLOUD_ENABLED) return;
+      try {
+        const { data, error } = await supabase
+          .from("app_metadata")
+          .select("value")
+          .eq("key", "subject_data")
+          .single();
+
+        if (error && error.code !== "PGRST116") {
+          console.warn("Supabase subject load error:", error.message);
+          return;
+        }
+
+        if (data?.value) {
+          setSubjectData(data.value);
+          const currentSubject = Object.keys(data.value)[0] ?? selectedSubject;
+          setSelectedSubject(currentSubject);
+          setSelectedChapter(data.value[currentSubject]?.[0] ?? "");
+        } else {
+          await supabase.from("app_metadata").upsert(
+            {
+              key: "subject_data",
+              value: subjectData,
+            },
+            { onConflict: "key" },
+          );
+        }
+      } catch (err) {
+        console.warn("Supabase subject sync failed", err);
+      }
+    };
+
+    syncSubjects();
+  }, []);
+
+  useEffect(() => {
+    if (!CLOUD_ENABLED) return;
+    const save = async () => {
+      try {
+        await supabase.from("app_metadata").upsert(
+          {
+            key: "subject_data",
+            value: subjectData,
+          },
+          { onConflict: "key" },
+        );
+      } catch (err) {
+        console.warn("Supabase subject save failed", err);
+      }
+    };
+    save();
   }, [subjectData]);
 
   useEffect(() => {
@@ -202,22 +260,146 @@ const App = () => {
     }
   }, [selectedSubject, selectedChapter, subjectData]);
 
+  const loadChapterProgressCloud = async (subject, chapter) => {
+    if (!CLOUD_ENABLED) return null;
+    const { data } = await supabase
+      .from("chapter_progress")
+      .select("checked_items")
+      .match({ subject, chapter })
+      .single();
+    return data?.checked_items ?? null;
+  };
+
+  const saveChapterProgressCloud = async (subject, chapter, checkedItems) => {
+    if (!CLOUD_ENABLED) return;
+    await supabase.from("chapter_progress").upsert(
+      {
+        subject,
+        chapter,
+        checked_items: checkedItems,
+      },
+      { onConflict: ["subject", "chapter"] },
+    );
+  };
+
+  const loadAllProgressCloud = async () => {
+    if (!CLOUD_ENABLED) return [];
+    const { data } = await supabase
+      .from("chapter_progress")
+      .select("subject, chapter, checked_items");
+    return (data || []).map((row) => {
+      const completed = Object.values(row.checked_items || {}).filter(
+        Boolean,
+      ).length;
+      return {
+        subject: row.subject,
+        chapter: row.chapter,
+        completed,
+        percent: Math.round((completed / CHECKLIST_ITEM_COUNT) * 100),
+      };
+    });
+  };
+
+  const renameChapterKeyCloud = async (subject, oldChapter, newChapter) => {
+    if (!CLOUD_ENABLED) return;
+    const { data } = await supabase
+      .from("chapter_progress")
+      .select("checked_items")
+      .match({ subject, chapter: oldChapter })
+      .single();
+
+    if (data?.checked_items) {
+      await supabase.from("chapter_progress").upsert(
+        {
+          subject,
+          chapter: newChapter,
+          checked_items: data.checked_items,
+        },
+        { onConflict: ["subject", "chapter"] },
+      );
+      await supabase
+        .from("chapter_progress")
+        .delete()
+        .match({ subject, chapter: oldChapter });
+    }
+  };
+
+  const renameSubjectKeyCloud = async (oldSubject, newSubject) => {
+    if (!CLOUD_ENABLED) return;
+    const { data } = await supabase
+      .from("chapter_progress")
+      .select("subject, chapter, checked_items")
+      .match({ subject: oldSubject });
+
+    if (data) {
+      for (const row of data) {
+        await supabase.from("chapter_progress").upsert(
+          {
+            subject: newSubject,
+            chapter: row.chapter,
+            checked_items: row.checked_items,
+          },
+          { onConflict: ["subject", "chapter"] },
+        );
+        await supabase
+          .from("chapter_progress")
+          .delete()
+          .match({ subject: oldSubject, chapter: row.chapter });
+      }
+    }
+  };
+
+  const deleteChapterProgressCloud = async (subject, chapter) => {
+    if (!CLOUD_ENABLED) return;
+    await supabase
+      .from("chapter_progress")
+      .delete()
+      .match({ subject, chapter });
+  };
+
+  const deleteSubjectProgressCloud = async (subject) => {
+    if (!CLOUD_ENABLED) return;
+    await supabase.from("chapter_progress").delete().match({ subject });
+  };
+
   // 1. Initial Load when StorageKey changes
   useEffect(() => {
     setIsLoaded(false); // Pause saving during transition
-    const saved = localStorage.getItem(storageKey);
-    const parsed = saved ? JSON.parse(saved) : {};
-    setCheckedItems(parsed);
-    lastKeyRef.current = storageKey;
-    setIsLoaded(true); // Resume saving for the new key
-  }, [storageKey]);
+    const load = async () => {
+      if (CLOUD_ENABLED) {
+        const cloud = await loadChapterProgressCloud(
+          selectedSubject,
+          selectedChapter,
+        );
+        if (cloud) {
+          setCheckedItems(cloud);
+        } else {
+          const saved = localStorage.getItem(storageKey);
+          setCheckedItems(saved ? JSON.parse(saved) : {});
+        }
+      } else {
+        const saved = localStorage.getItem(storageKey);
+        setCheckedItems(saved ? JSON.parse(saved) : {});
+      }
+      lastKeyRef.current = storageKey;
+      setIsLoaded(true); // Resume saving for the new key
+    };
+    load();
+  }, [storageKey, selectedSubject, selectedChapter]);
 
   // 2. Save only when checkedItems changes AND we are fully loaded for the current key
   useEffect(() => {
     if (isLoaded && lastKeyRef.current === storageKey) {
       localStorage.setItem(storageKey, JSON.stringify(checkedItems));
+      saveChapterProgressCloud(
+        selectedSubject,
+        selectedChapter,
+        checkedItems,
+      ).catch((err) => {
+        console.warn("Supabase progress save failed", err);
+      });
     }
-  }, [checkedItems, isLoaded, storageKey]);
+  }, [checkedItems, isLoaded, storageKey, selectedSubject, selectedChapter]);
 
   const toggleItem = (itemId) => {
     if (!isLoaded) return;
@@ -270,6 +452,7 @@ const App = () => {
     }));
     setSelectedSubject(normalized);
     setSelectedChapter("");
+    setShowEditMenu(false);
   };
 
   const handleAddChapter = () => {
@@ -288,6 +471,7 @@ const App = () => {
       [selectedSubject]: [...(prev[selectedSubject] || []), trimmed],
     }));
     setSelectedChapter(trimmed);
+    setShowEditMenu(false);
   };
 
   const handleRenameSubject = () => {
@@ -305,8 +489,81 @@ const App = () => {
       return updated;
     });
     renameSubjectKey(selectedSubject, normalized);
+    renameSubjectKeyCloud(selectedSubject, normalized).catch((err) => {
+      console.warn("Supabase subject rename failed", err);
+    });
     setSelectedSubject(normalized);
+    setShowEditMenu(false);
   };
+
+  const handleDeleteSelectedChapter = () => {
+    if (!selectedChapter) return;
+    if (
+      !window.confirm(
+        `Delete chapter "${selectedChapter}" from ${selectedSubject}?`,
+      )
+    ) {
+      return;
+    }
+
+    const chapters = subjectData[selectedSubject] || [];
+    const nextChapters = chapters.filter(
+      (chapter) => chapter !== selectedChapter,
+    );
+
+    setSubjectData((prev) => ({
+      ...prev,
+      [selectedSubject]: nextChapters,
+    }));
+
+    localStorage.removeItem(storageKey);
+    if (CLOUD_ENABLED) {
+      deleteChapterProgressCloud(selectedSubject, selectedChapter).catch(
+        (err) => {
+          console.warn("Supabase chapter delete failed", err);
+        },
+      );
+    }
+
+    setSelectedChapter(nextChapters[0] ?? "");
+    setShowEditMenu(false);
+  };
+
+  const handleDeleteSelectedSubject = () => {
+    if (!selectedSubject) return;
+    if (
+      !window.confirm(
+        `Delete subject "${selectedSubject}" and all its chapters?`,
+      )
+    ) {
+      return;
+    }
+
+    const nextData = { ...subjectData };
+    const removedChapters = nextData[selectedSubject] || [];
+    delete nextData[selectedSubject];
+
+    setSubjectData(nextData);
+
+    removedChapters.forEach((chapter) => {
+      localStorage.removeItem(
+        `crispr_v3_${selectedSubject}_${chapter.replace(/\s/g, "_")}`,
+      );
+    });
+
+    if (CLOUD_ENABLED) {
+      deleteSubjectProgressCloud(selectedSubject).catch((err) => {
+        console.warn("Supabase subject delete failed", err);
+      });
+    }
+
+    const nextSubject = Object.keys(nextData)[0] ?? "";
+    setSelectedSubject(nextSubject);
+    setSelectedChapter(nextData[nextSubject]?.[0] ?? "");
+    setShowEditMenu(false);
+  };
+
+  const closeEditMenu = () => setShowEditMenu(false);
 
   const handleRenameChapter = () => {
     if (!selectedChapter) return;
@@ -327,7 +584,53 @@ const App = () => {
       };
     });
     renameChapterKey(selectedSubject, selectedChapter, trimmed);
+    renameChapterKeyCloud(selectedSubject, selectedChapter, trimmed).catch(
+      (err) => {
+        console.warn("Supabase chapter rename failed", err);
+      },
+    );
     setSelectedChapter(trimmed);
+    setShowEditMenu(false);
+  };
+
+  const handleDeleteAll = () => {
+    if (
+      !window.confirm(
+        "Are you absolutely sure? This will delete ALL chapters and subjects permanently.",
+      )
+    ) {
+      return;
+    }
+    if (!window.confirm("This action cannot be undone. Delete everything?")) {
+      return;
+    }
+
+    // Clear all local storage entries
+    Object.keys(localStorage).forEach((key) => {
+      if (key.startsWith("crispr_v3_")) {
+        localStorage.removeItem(key);
+      }
+    });
+
+    // Clear cloud data if enabled
+    if (CLOUD_ENABLED) {
+      supabase
+        .from("chapter_progress")
+        .delete()
+        .neq("subject", "")
+        .catch((err) => {
+          console.warn("Supabase delete all failed", err);
+        });
+    }
+
+    // Reset state
+    setSubjectData(SUBJECT_CONFIG);
+    setSelectedSubject(Object.keys(SUBJECT_CONFIG)[0] ?? "PHYSICS");
+    setSelectedChapter(
+      SUBJECT_CONFIG[Object.keys(SUBJECT_CONFIG)[0]]?.[0] ?? "",
+    );
+    setCheckedItems({});
+    setShowEditMenu(false);
   };
 
   const totalCount = CHECKLIST_ITEM_COUNT;
@@ -355,11 +658,26 @@ const App = () => {
     return summary;
   }, [subjectData, selectedSubject, selectedChapter, checkedItems]);
 
+  useEffect(() => {
+    if (!CLOUD_ENABLED) return;
+    const refresh = async () => {
+      try {
+        const progress = await loadAllProgressCloud();
+        setCloudSummary(progress);
+      } catch (err) {
+        console.warn("Supabase summary load failed", err);
+      }
+    };
+    refresh();
+  }, [subjectData, checkedItems, selectedSubject, selectedChapter]);
+
+  const summaryData = CLOUD_ENABLED ? cloudSummary : allChapterSummary;
+
   const overallProgress =
-    allChapterSummary.length > 0
+    summaryData.length > 0
       ? Math.round(
-          allChapterSummary.reduce((sum, chapter) => sum + chapter.percent, 0) /
-            allChapterSummary.length,
+          summaryData.reduce((sum, chapter) => sum + chapter.percent, 0) /
+            summaryData.length,
         )
       : 0;
 
@@ -456,7 +774,7 @@ const App = () => {
               Quality audit & content verification checklist
             </p>
 
-            <div className="mt-6 flex flex-wrap gap-3">
+            <div className="mt-6 flex flex-wrap items-start gap-3">
               <button
                 onClick={() => setPageMode("checklist")}
                 className={`rounded-full px-4 py-2 text-xs font-black uppercase tracking-[0.2em] transition ${pageMode === "checklist" ? "bg-blue-500 text-white" : "bg-white/5 text-gray-300 hover:bg-white/10"}`}
@@ -469,30 +787,86 @@ const App = () => {
               >
                 All progress
               </button>
-              <button
-                onClick={handleAddChapter}
-                className="rounded-full px-4 py-2 text-xs font-black uppercase tracking-[0.2em] bg-white/5 text-gray-300 hover:bg-white/10"
-              >
-                Add chapter
-              </button>
-              <button
-                onClick={handleAddSubject}
-                className="rounded-full px-4 py-2 text-xs font-black uppercase tracking-[0.2em] bg-white/5 text-gray-300 hover:bg-white/10"
-              >
-                Add subject
-              </button>
-              <button
-                onClick={handleRenameChapter}
-                className="rounded-full px-4 py-2 text-xs font-black uppercase tracking-[0.2em] bg-white/5 text-gray-300 hover:bg-white/10"
-              >
-                Rename chapter
-              </button>
-              <button
-                onClick={handleRenameSubject}
-                className="rounded-full px-4 py-2 text-xs font-black uppercase tracking-[0.2em] bg-white/5 text-gray-300 hover:bg-white/10"
-              >
-                Rename subject
-              </button>
+              <div className="relative">
+                <button
+                  onClick={() => setShowEditMenu((prev) => !prev)}
+                  className="rounded-full px-4 py-2 text-xs font-black uppercase tracking-[0.2em] bg-white/5 text-gray-300 hover:bg-white/10 flex items-center gap-2"
+                >
+                  <MoreVertical className="w-4 h-4" />
+                  Edit
+                </button>
+                {showEditMenu && (
+                  <div className="absolute right-0 z-20 mt-2 w-64 rounded-3xl border border-white/10 bg-[#111]/95 p-3 shadow-2xl">
+                    <div className="space-y-2">
+                      <button
+                        onClick={() => {
+                          handleAddChapter();
+                          closeEditMenu();
+                        }}
+                        className="w-full rounded-xl px-3 py-2 text-left text-xs font-bold uppercase tracking-[0.15em] text-white transition hover:bg-white/5"
+                      >
+                        Add chapter
+                      </button>
+                      <button
+                        onClick={() => {
+                          handleRenameChapter();
+                          closeEditMenu();
+                        }}
+                        className="w-full rounded-xl px-3 py-2 text-left text-xs font-bold uppercase tracking-[0.15em] text-white transition hover:bg-white/5"
+                      >
+                        Rename selected chapter
+                      </button>
+                      <button
+                        onClick={() => {
+                          handleDeleteSelectedChapter();
+                          closeEditMenu();
+                        }}
+                        className="w-full rounded-xl px-3 py-2 text-left text-xs font-bold uppercase tracking-[0.15em] text-red-400 transition hover:bg-white/5"
+                      >
+                        Delete selected chapter
+                      </button>
+                      <div className="border-t border-white/10" />
+                      <button
+                        onClick={() => {
+                          handleAddSubject();
+                          closeEditMenu();
+                        }}
+                        className="w-full rounded-xl px-3 py-2 text-left text-xs font-bold uppercase tracking-[0.15em] text-white transition hover:bg-white/5"
+                      >
+                        Add subject
+                      </button>
+                      <button
+                        onClick={() => {
+                          handleRenameSubject();
+                          closeEditMenu();
+                        }}
+                        className="w-full rounded-xl px-3 py-2 text-left text-xs font-bold uppercase tracking-[0.15em] text-white transition hover:bg-white/5"
+                      >
+                        Rename selected subject
+                      </button>
+                      <button
+                        onClick={() => {
+                          handleDeleteSelectedSubject();
+                          closeEditMenu();
+                        }}
+                        className="w-full rounded-xl px-3 py-2 text-left text-xs font-bold uppercase tracking-[0.15em] text-red-400 transition hover:bg-white/5"
+                      >
+                        Delete selected subject
+                      </button>
+                      <div className="border-t border-white/10" />
+                      <button
+                        onClick={() => {
+                          handleDeleteAll();
+                          closeEditMenu();
+                        }}
+                        className="w-full rounded-xl px-3 py-2 text-left text-xs font-bold uppercase tracking-[0.15em] text-red-600 transition hover:bg-red-500/20"
+                      >
+                        🗑️ Delete everything
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </header>
 
@@ -539,7 +913,7 @@ const App = () => {
                     <div className="space-y-3">
                       {chapters.map((chapter) => {
                         const chapterProgress =
-                          allChapterSummary.find(
+                          summaryData.find(
                             (item) =>
                               item.subject === subject &&
                               item.chapter === chapter,
